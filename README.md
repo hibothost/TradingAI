@@ -1,93 +1,158 @@
-# ICT/SMC + S&R Trading Bot for MetaTrader 5
+# ICT/SMC + S&R Trading Bot
 
-## Strategy
-Combines three ICT/Smart Money Concept principles:
-- **Order Blocks (OB)** — Last opposing candle before an impulsive move
-- **Fair Value Gaps (FVG)** — 3-candle imbalance / liquidity void
-- **Support & Resistance** — Clustered swing highs/lows
-- **Market Structure** — HTF (H4) Break of Structure for directional bias
-- **Kill Zone Filter** — Only executes during London Open (07:00–10:00 UTC) and NY Open (12:00–15:00 UTC)
-
-Minimum 3 confluence factors are required before a trade is placed.
+**Stack:** AWS EC2 Windows (MT5) → MetaApi → Render (Python Bot) ← GitHub
 
 ---
 
-## Requirements
-- Windows PC (MetaTrader5 Python library is Windows-only)
-- MetaTrader 5 terminal installed and open
-- Python 3.10+
+## Architecture
+
+```
+┌─────────────────────┐     MetaApi      ┌──────────────────────┐
+│  AWS EC2 Windows    │ ←── bridge ────→ │  Render (Linux)      │
+│  MT5 Terminal       │                  │  Python Bot          │
+│  (watch trades      │                  │  Flask Dashboard     │
+│   live here)        │                  │  /api/* endpoints    │
+└─────────────────────┘                  └──────────────────────┘
+                                                   ↑
+                                          GitHub auto-deploy
+```
+
+MetaApi bridges your MT5 account to the Python bot on Render's Linux servers.
 
 ---
 
-## Setup
+## Step 1 — MetaApi Setup
 
-### 1. Install dependencies
+1. Sign up at **https://metaapi.cloud** (free tier available)
+2. Go to **MT Accounts → Add Account**
+3. Enter your broker credentials:
+   - Login (account number), Password, Server (e.g. `ICMarkets-Demo`), Platform: `MT5`
+4. Wait for status → **DEPLOYED**
+5. Go to **API Access → Auth Tokens → Generate Token**
+6. Copy your `METAAPI_TOKEN` and `METAAPI_ACCOUNT_ID`
+
+> Your AWS EC2 MT5 terminal is for visual monitoring. MetaApi connects directly
+> to your broker's server — MT5 on EC2 does not need to be running for trades.
+
+---
+
+## Step 2 — GitHub Setup
+
+Push these files to a **private** repo:
+
+```
+TradingAI/
+├── mt5_bot_cloud.py      ← main bot (Render runs this)
+├── dashboard.html        ← dashboard (served by Flask at /)
+├── requirements.txt      ← Python dependencies
+├── render.yaml           ← Render auto-config
+├── .env.example          ← env var template (safe to commit)
+└── README.md
+```
+
 ```bash
-pip install -r requirements.txt
+git init
+git add .
+git commit -m "Initial bot setup"
+git remote add origin https://github.com/YOUR_USERNAME/TradingAI.git
+git push -u origin main
 ```
 
-### 2. Configure the bot
-Open `mt5_trading_bot.py` and edit the CONFIG block at the top:
-
-```python
-CONFIG = {
-    "login":    None,     # Your MT5 account number  e.g. 12345678
-    "password": None,     # Your MT5 password
-    "server":   None,     # Your broker's server     e.g. "ICMarkets-Demo"
-    "symbol":   "EURUSD", # Symbol to trade
-    "risk_pct": 1.0,      # % of balance per trade
-    "min_rr":   2.0,      # Minimum Risk:Reward ratio
-    ...
-}
-```
-
-> If you're already logged into MT5, you can leave login/password/server as None.
-
-### 3. Run the bot
-```bash
-python mt5_trading_bot.py
-```
-
-### 4. Open the dashboard
-Open `dashboard.html` in your browser. It will automatically connect to the bot at `http://localhost:5000`.
+**Add `.env` to your `.gitignore`** — never commit real credentials.
 
 ---
 
-## Dashboard Features
-| Feature | Description |
-|---|---|
-| LIVE / DEMO badge | Green = connected to your bot |
-| H4 Bias | Current higher timeframe market structure |
-| Kill Zones | Countdown to next London / NY open |
-| S&R Levels | Nearest support and resistance with strength bars |
-| Signals tab | Active ICT/SMC setups with confluence breakdown |
-| Equity tab | Live equity curve + drawdown stats |
-| History tab | Full trade history with P&L |
-| ⚙ Config | Adjust risk %, RR, max trades without restarting |
+## Step 3 — Render Deployment
+
+1. **https://render.com** → New → Web Service → connect GitHub repo
+2. Render auto-reads `render.yaml`
+3. Go to **Environment** and add these two secrets:
+
+   | Key | Value |
+   |---|---|
+   | `METAAPI_TOKEN` | from MetaApi dashboard |
+   | `METAAPI_ACCOUNT_ID` | from MetaApi dashboard |
+
+4. Click **Deploy** — build takes ~2 minutes
+5. Visit your Render URL → dashboard loads ✓
+
+> **Use Starter plan ($7/mo).** Free tier spins down after 15 min of inactivity
+> which would kill the bot mid-session.
+
+---
+
+## Step 4 — Start the Bot
+
+1. Open your Render URL (e.g. `https://ict-smc-bot.onrender.com`)
+2. Check connection badge shows **LIVE**
+3. Click **▶ START**
+4. Bot scans every 60s, executes during London (07–10 UTC) and NY (12–15 UTC) kill zones only
+
+---
+
+## Environment Variables
+
+| Variable | Default | Description |
+|---|---|---|
+| `METAAPI_TOKEN` | **required** | MetaApi auth token |
+| `METAAPI_ACCOUNT_ID` | **required** | MT5 account ID on MetaApi |
+| `TRADING_SYMBOL` | `EURUSD` | Symbol to trade |
+| `HTF_TIMEFRAME` | `4h` | Structure timeframe |
+| `LTF_TIMEFRAME` | `15m` | Entry timeframe |
+| `RISK_PCT` | `1.0` | % of balance per trade |
+| `MIN_RR` | `2.0` | Min risk:reward |
+| `MAX_TRADES` | `3` | Max concurrent positions |
+| `MIN_CONFLUENCE` | `3` | Min ICT/SMC score to execute |
+| `MAX_SPREAD` | `20` | Max spread (points) |
+| `SCAN_INTERVAL` | `60` | Seconds between scans |
 
 ---
 
 ## API Endpoints
-The bot exposes a REST API on port 5000:
 
 | Method | Endpoint | Description |
 |---|---|---|
-| GET | `/api/status` | Full bot state, signals, open trades |
+| GET | `/` | Trading dashboard UI |
+| GET | `/health` | Health check (used by Render) |
+| GET | `/api/status` | Bot state, signals, open trades |
 | GET | `/api/history` | Last 100 closed trades |
 | GET | `/api/equity` | Equity curve data |
-| POST | `/api/start` | Start the bot loop |
-| POST | `/api/stop` | Stop the bot loop |
-| GET/POST | `/api/config` | Get or update config |
-| POST | `/api/close/<ticket>` | Close a specific trade |
-| POST | `/api/closeall` | Close all bot trades |
+| POST | `/api/start` | Start bot loop |
+| POST | `/api/stop` | Stop bot loop |
+| GET/POST | `/api/config` | Read or update settings |
+| POST | `/api/close/<id>` | Close a position |
+| POST | `/api/closeall` | Close all bot positions |
 
 ---
 
-## Risk Warning
-This bot places real trades with real money. Always:
-- Test on a **demo account** first
-- Start with minimum lot sizes
-- Monitor performance regularly
-- Never risk more than you can afford to lose
+## Strategy Components
 
-The bot is provided as-is for educational purposes.
+| Component | How It Works |
+|---|---|
+| **Market Structure** | H4 swing points → HH+HL = Bullish, LH+LL = Bearish, BOS confirmation |
+| **Order Blocks** | Last opposing candle before impulsive move (unmitigated only) |
+| **Fair Value Gaps** | 3-candle imbalance, unfilled only |
+| **Support & Resistance** | Clustered swing highs/lows with touch-count strength |
+| **Kill Zone Filter** | London 07–10 UTC · NY Open 12–15 UTC |
+| **Confluence Score** | 3+/5 required: HTF Bias + OB + FVG + S&R + Kill Zone |
+| **Lot Sizing** | Auto: balance × risk% ÷ (SL pips × pip value) |
+
+---
+
+## EC2 Windows VPS Tips
+
+Your EC2 instance is valuable for:
+- **Watching live trades** in the MT5 terminal as the bot executes
+- **Manual intervention** — adjust SL/TP or close trades directly in MT5
+- **Running the Windows bot** (`mt5_trading_bot.py`) locally for minimum latency:
+  ```bash
+  pip install MetaTrader5 pandas numpy flask flask-cors
+  python mt5_trading_bot.py
+  ```
+
+---
+
+## ⚠️ Risk Warning
+
+Always test on a **demo account** for at least 2 weeks before going live.
+Start with `RISK_PCT=0.5` or lower. Never risk money you cannot afford to lose.
