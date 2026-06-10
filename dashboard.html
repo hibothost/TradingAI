@@ -258,7 +258,8 @@
 </div>
 
 <script>
-const BASE = "http://localhost:5000";
+// Auto-detect: relative URLs when served by Flask (Render), localhost when opened as a file
+const BASE = window.location.protocol === "file:" ? "http://localhost:5000" : "";
 let botRunning = false;
 let isLive = false;
 let equityChart = null;
